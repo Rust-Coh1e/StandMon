@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,9 +23,10 @@ type ProductInfo struct {
 	CheckedAt time.Time
 }
 
-type Parser interface {
-	Parse(ctx context.Context, url string) (ProductInfo, error)
-}
+// пока перенес в registry
+// type Parser interface {
+// 	Parse(ctx context.Context, url string) (ProductInfo, error)
+// }
 
 func NormalizeToKopecks(input string) (int, error) {
 	// 1. Предварительная очистка
@@ -153,12 +155,15 @@ func (b *BaltOptTorg) Parse(ctx context.Context, url string) (ProductInfo, error
 	}, nil
 }
 
+//////////////////////////////////////////////////////////////////////////////////
+// Перестал работать
+
 type OzonParser struct {
 }
 
 func (b *OzonParser) Parse(ctx context.Context, url string) (ProductInfo, error) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
+		chromedp.Flag("headless", false),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.WindowSize(1920, 1080),
 	)
@@ -189,7 +194,7 @@ func (b *OzonParser) Parse(ctx context.Context, url string) (ProductInfo, error)
 	)
 
 	if err != nil {
-		return ProductInfo{}, fmt.Errorf("Ошибка получения HTML страницы: %v", err)
+		return ProductInfo{}, fmt.Errorf("Ошибка получения HTML страницы: %w", err)
 	}
 
 	// Ищем в HTML текст вида "price":"41500" или "price":41500
@@ -221,3 +226,100 @@ func (b *OzonParser) Parse(ctx context.Context, url string) (ProductInfo, error)
 	}, nil
 
 }
+
+//////////////////////////////////////////////////////////////////////////////////
+
+type RegardParser struct{}
+
+type RegardProductJSON struct {
+	Type   string `json:"@type"`
+	Offers struct {
+		Price         json.RawMessage `json:"price"`
+		PriceCurrency string          `json:"priceCurrency"`
+	} `json:"offers"`
+}
+
+func (r *RegardParser) Parse(
+	ctx context.Context,
+	productURL string,
+) (ProductInfo, error) {
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		productURL,
+		nil,
+	)
+	if err != nil {
+		return ProductInfo{}, err
+	}
+
+	req.Header.Set("User-Agent", "PriceMon/0.1")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ProductInfo{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return ProductInfo{},
+			fmt.Errorf("unexpected status code: %d", res.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		return ProductInfo{}, err
+	}
+
+	var product RegardProductJSON
+	found := false
+
+	doc.Find(`script[type="application/ld+json"]`).
+		EachWithBreak(func(_ int, s *goquery.Selection) bool {
+
+			var candidate RegardProductJSON
+
+			if err := json.Unmarshal(
+				[]byte(s.Text()),
+				&candidate,
+			); err != nil {
+				return true
+			}
+
+			if candidate.Type == "Product" {
+				product = candidate
+				found = true
+				return false
+			}
+
+			return true
+		})
+
+	if !found {
+		return ProductInfo{},
+			fmt.Errorf("product JSON-LD not found")
+	}
+
+	rawPrice := strings.Trim(
+		string(product.Offers.Price),
+		`"`,
+	)
+
+	price, err := NormalizeToKopecks(rawPrice)
+	if err != nil {
+		return ProductInfo{}, fmt.Errorf(
+			"normalize price %q: %w",
+			rawPrice,
+			err,
+		)
+	}
+
+	return ProductInfo{
+		Store:     "Regard",
+		Price:     price,
+		CheckedAt: time.Now(),
+	}, nil
+}
+
+//////////////////////////////////////////////////////////////////////////////////
