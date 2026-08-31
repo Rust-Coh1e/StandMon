@@ -26,7 +26,7 @@ func NewParserRegistry() *ParserRegistry {
 	}
 }
 
-func (p *ParserRegistry) Resolve(productURL string) (Parser, error) {
+func (p *ParserRegistry) Resolve(productURL string) (parser.Parser, error) {
 	parsedURL, err := url.Parse(productURL)
 	if err != nil {
 		return nil, err

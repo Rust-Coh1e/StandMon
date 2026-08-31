@@ -23,6 +23,10 @@ type ProductInfo struct {
 	CheckedAt time.Time
 }
 
+type Parser interface {
+	Parse(ctx context.Context, url string) (ProductInfo, error)
+}
+
 // пока перенес в registry
 // type Parser interface {
 // 	Parse(ctx context.Context, url string) (ProductInfo, error)
