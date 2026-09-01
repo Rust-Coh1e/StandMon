@@ -1,29 +1,30 @@
-CREATE TABLE IF NOT EXIST User(
-    id SERIAL PRIMARY KEY,
-    email TEXT NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE products (
+    id BIGSERIAL PRIMARY KEY,
+    url TEXT NOT NULL UNIQUE,
+    store TEXT NOT NULL,
+    check_interval_seconds BIGINT NOT NULL,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXIST Product(
-    id SERIAL PRIMARY KEY,
-    stand_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    priority VARCHAR(10) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE price_check_tasks (
+    id BIGSERIAL PRIMARY KEY,
+    product_id BIGINT NOT NULL REFERENCES products(id),
 
-    FOREIGN KEY (stand_id) REFERENCES Stand(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+
+    status TEXT NOT NULL DEFAULT 'pending',
+
+    attempt_count INT NOT NULL DEFAULT 0,
+
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+
+    locked_by TEXT,
+    locked_until TIMESTAMPTZ,
+
+    next_retry_at TIMESTAMPTZ,
+    error_message TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-CREATE TABLE IF NOT EXIST Subscription(
-    id SERIAL PRIMARY KEY,
-);
-
-CREATE TABLE IF NOT EXIST PriceCheckJob(
-    id SERIAL PRIMARY KEY,
-)
-
-CREATE TABLE IF NOT EXIST PriceSnapshot(
-    id SERIAL PRIMARY KEY,
-)
