@@ -137,10 +137,13 @@ func (tr *TaskRepository) ClaimDueTasks(ctx context.Context, now time.Time, limi
 		ids = append(ids, t.ID)
 	}
 
+<<<<<<< HEAD
 	if err := rows.Err(); err != nil {
 		return []scheduler.CheckTask{}, fmt.Errorf("ошибка при чтении строк: %w", err)
 	}
 
+=======
+>>>>>>> 03bcff6c4c23963d4ab4be6932aad635949f6df5
 	// теперь нужно сделать Lock
 
 	query = `
@@ -149,11 +152,16 @@ func (tr *TaskRepository) ClaimDueTasks(ctx context.Context, now time.Time, limi
 			WHERE id = ANY($3)`
 
 	upd, err := tx.Exec(ctx, query, tr.lockedBy, now.Add(tr.leaseDuration), ids)
+<<<<<<< HEAD
 	if err != nil {
 		return []scheduler.CheckTask{}, fmt.Errorf("ошибка обновления строки: %w", err)
 	}
 	if upd.RowsAffected() != int64(len(ids)) {
 		return []scheduler.CheckTask{}, fmt.Errorf("Некорректное изменение строк: Changed %d waited %d", upd.RowsAffected(), int64(len(ids)))
+=======
+	if err != nil || upd.RowsAffected() != int64(len(ids)) {
+		return []scheduler.CheckTask{}, fmt.Errorf("ошибка обновления строки: %w\n Changed %d waited %d", err, upd.RowsAffected(), int64(len(ids)))
+>>>>>>> 03bcff6c4c23963d4ab4be6932aad635949f6df5
 	}
 
 	err = tx.Commit(ctx)
