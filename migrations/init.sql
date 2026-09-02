@@ -28,3 +28,11 @@ CREATE TABLE price_check_tasks (
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE price_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL REFERENCES price_check_tasks(id) UNIQUE,
+    product_id BIGINT NOT NULL REFERENCES products(id),
+    price INT NOT NULL,
+    checked_at TIMESTAMPTZ NOT NULL
+);

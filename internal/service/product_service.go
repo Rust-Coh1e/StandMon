@@ -17,6 +17,7 @@ type Product struct {
 
 // PriceSnapshot — цена конкретного Product в конкретный момент времени.
 type PriceSnapshot struct {
+	ID        int64
 	ProductID int64
 	Price     int
 	CheckedAt time.Time

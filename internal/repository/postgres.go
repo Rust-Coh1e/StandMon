@@ -1,7 +1,10 @@
 package postgres
 
 import (
+	"PriceMon/internal/planner"
 	"PriceMon/internal/scheduler"
+	product_service "PriceMon/internal/service"
+	"PriceMon/internal/worker"
 	"context"
 	"fmt"
 	"time"
@@ -166,4 +169,147 @@ func (tr *TaskRepository) ClaimDueTasks(ctx context.Context, now time.Time, limi
 	}
 
 	return tasks, nil
+}
+
+func (tr *TaskRepository) CreatePriceSnapshot(ctx context.Context, inputSnapshot worker.CheckResult) (product_service.PriceSnapshot, error) {
+
+	query := `INSERT into price_snapshots (task_id, product_id, price, checked_at) 
+				VALUES ($1, $2, $3, $4) 
+				RETURNING id`
+	var id int64
+	err := tr.db.QueryRow(ctx, query, inputSnapshot.Task.ID, inputSnapshot.Task.ProductID, inputSnapshot.Info.Price, inputSnapshot.Info.CheckedAt).Scan(&id)
+	if err != nil {
+		return product_service.PriceSnapshot{}, fmt.Errorf("create check task: %w", err)
+	}
+
+	return product_service.PriceSnapshot{
+		ID:        id,
+		ProductID: inputSnapshot.Task.ProductID,
+		Price:     inputSnapshot.Info.Price,
+		CheckedAt: inputSnapshot.Info.CheckedAt,
+	}, nil
+}
+
+func (tr *TaskRepository) CompleteTask(ctx context.Context, taskID int64, finishedAt time.Time) error {
+	query := `UPDATE price_check_tasks as pct
+			  SET status = 'completed', finished_at = $1 locked_by = NULL, locked_until = NULL
+			  WHERE 
+			  		id = $2
+			  AND
+			  		status = 'pending'`
+	rows, err := tr.db.Exec(ctx, query, finishedAt, taskID)
+	if err != nil {
+		return fmt.Errorf("sql update: %w", err)
+	}
+	if rows.RowsAffected() != 1 {
+		return fmt.Errorf(
+			"complete task %d: expected 1 affected row, got %d",
+			taskID,
+			rows.RowsAffected(),
+		)
+	}
+	return nil
+}
+
+func (tr *TaskRepository) RetryTask(ctx context.Context, taskID int64, nextRetryAt time.Time, inputErr string) error {
+	query := `	
+		UPDATE price_check_tasks 
+		SET
+			attempt_count = attempt_count + 1,
+			next_retry_at = $1,
+			error_message = $2,
+			locked_by = NULL,
+			locked_until = NULL
+
+		WHERE id = $3
+			AND status = 'pending'`
+
+	rows, err := tr.db.Exec(ctx, query, nextRetryAt, inputErr, taskID)
+	if err != nil {
+		return fmt.Errorf("sql update: %w", err)
+	}
+
+	if rows.RowsAffected() != 1 {
+		return fmt.Errorf(
+			"complete task %d: expected 1 affected row, got %d",
+			taskID,
+			rows.RowsAffected(),
+		)
+	}
+	return nil
+}
+
+func (tr *TaskRepository) FailTask(ctx context.Context, taskID int64, inputErr string, now time.Time) error {
+	query := `	
+		UPDATE price_check_tasks 
+		SET
+			status = 'failed',
+			error_message = $1,
+			locked_by = NULL,
+			locked_until = NULL,
+			finished_at = $2,
+			next_retry_at = NULL,
+			attempt_count = attempt_count + 1,
+
+		WHERE id = $3
+			AND status = 'pending'`
+
+	rows, err := tr.db.Exec(ctx, query, inputErr, now, taskID)
+	if err != nil {
+		return fmt.Errorf("sql update: %w", err)
+	}
+
+	if rows.RowsAffected() != 1 {
+		return fmt.Errorf(
+			"retry task %d: expected 1 affected row, got %d",
+			taskID,
+			rows.RowsAffected(),
+		)
+	}
+	return nil
+}
+
+func (tr *TaskRepository) ListActive(ctx context.Context) ([]planner.ProductPlan, error) {
+	query := `
+		SELECT
+			id,
+			url,
+			check_interval_seconds
+		FROM products
+		WHERE active = true
+	`
+
+	rows, err := tr.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("list active products: %w", err)
+	}
+	defer rows.Close()
+
+	products := make([]planner.ProductPlan, 0)
+
+	for rows.Next() {
+		var (
+			product         planner.ProductPlan
+			intervalSeconds int64
+		)
+
+		err := rows.Scan(
+			&product.ProductID,
+			&product.URL,
+			&intervalSeconds,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan active product: %w", err)
+		}
+
+		product.Interval = time.Duration(intervalSeconds) * time.Second
+
+		products = append(products, product)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active products: %w", err)
+	}
+
+	return products, nil
 }
