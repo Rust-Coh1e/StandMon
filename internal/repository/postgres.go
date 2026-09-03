@@ -3,7 +3,6 @@ package postgres
 import (
 	"PriceMon/internal/planner"
 	"PriceMon/internal/scheduler"
-	product_service "PriceMon/internal/service"
 	"PriceMon/internal/worker"
 	"context"
 	"fmt"
@@ -58,7 +57,7 @@ func NewTaskRepository(db *pgxpool.Pool, lockedBy string, leaseDuration time.Dur
 
 func (tr *TaskRepository) Create(ctx context.Context, task scheduler.CheckTask) (scheduler.CheckTask, error) {
 
-	query := `INSERT INTO price_check_tasks (product_id, scheduled_at, attemt_count) 
+	query := `INSERT INTO price_check_tasks (product_id, scheduled_at, attempt_count) 
 				VALUES ($1, $2, $3) 
 				RETURNING id`
 
@@ -171,42 +170,45 @@ func (tr *TaskRepository) ClaimDueTasks(ctx context.Context, now time.Time, limi
 	return tasks, nil
 }
 
-func (tr *TaskRepository) CreatePriceSnapshot(ctx context.Context, inputSnapshot worker.CheckResult) (product_service.PriceSnapshot, error) {
+func (tr *TaskRepository) CreatePriceSnapshot(ctx context.Context, inputSnapshot worker.CheckResult, finishedAt time.Time) error {
+
+	tx, err := tr.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("не удалось начать транзакцию: %w", err)
+	}
+	defer tx.Rollback(ctx)
 
 	query := `INSERT into price_snapshots (task_id, product_id, price, checked_at) 
 				VALUES ($1, $2, $3, $4) 
-				RETURNING id`
-	var id int64
-	err := tr.db.QueryRow(ctx, query, inputSnapshot.Task.ID, inputSnapshot.Task.ProductID, inputSnapshot.Info.Price, inputSnapshot.Info.CheckedAt).Scan(&id)
+				ON CONFLICT (task_id) DO NOTHING
+				`
+
+	_, err = tx.Exec(ctx, query, inputSnapshot.Task.ID, inputSnapshot.Task.ProductID, inputSnapshot.Info.Price, inputSnapshot.Info.CheckedAt)
 	if err != nil {
-		return product_service.PriceSnapshot{}, fmt.Errorf("create check task: %w", err)
+		return fmt.Errorf("create check task: %w", err)
 	}
 
-	return product_service.PriceSnapshot{
-		ID:        id,
-		ProductID: inputSnapshot.Task.ProductID,
-		Price:     inputSnapshot.Info.Price,
-		CheckedAt: inputSnapshot.Info.CheckedAt,
-	}, nil
-}
-
-func (tr *TaskRepository) CompleteTask(ctx context.Context, taskID int64, finishedAt time.Time) error {
-	query := `UPDATE price_check_tasks as pct
-			  SET status = 'completed', finished_at = $1 locked_by = NULL, locked_until = NULL
+	query = `UPDATE price_check_tasks as pct
+			  SET status = 'completed', finished_at = $1, locked_by = NULL, locked_until = NULL
 			  WHERE 
 			  		id = $2
 			  AND
 			  		status = 'pending'`
-	rows, err := tr.db.Exec(ctx, query, finishedAt, taskID)
+	rows, err := tx.Exec(ctx, query, finishedAt, inputSnapshot.Task.ID)
 	if err != nil {
 		return fmt.Errorf("sql update: %w", err)
 	}
 	if rows.RowsAffected() != 1 {
 		return fmt.Errorf(
 			"complete task %d: expected 1 affected row, got %d",
-			taskID,
+			inputSnapshot.Task.ID,
 			rows.RowsAffected(),
 		)
+	}
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -288,10 +290,8 @@ func (tr *TaskRepository) ListActive(ctx context.Context) ([]planner.ProductPlan
 	products := make([]planner.ProductPlan, 0)
 
 	for rows.Next() {
-		var (
-			product         planner.ProductPlan
-			intervalSeconds int64
-		)
+		var product planner.ProductPlan
+		var intervalSeconds int64
 
 		err := rows.Scan(
 			&product.ProductID,
@@ -312,4 +312,22 @@ func (tr *TaskRepository) ListActive(ctx context.Context) ([]planner.ProductPlan
 	}
 
 	return products, nil
+}
+
+func (tr *TaskRepository) CreateProduct(ctx context.Context, url string, checkInterval int64) (int64, error) {
+
+	query := `
+		INSERT INTO products (url, check_interval_seconds)
+		VALUES ($1, $2)
+		RETURNING id
+	`
+	var id int64
+
+	err := tr.db.QueryRow(ctx, query, url, checkInterval).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("SQL error: %w", err)
+	}
+
+	return id, nil
+
 }

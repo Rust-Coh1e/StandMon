@@ -3,6 +3,7 @@ package planner
 import (
 	"PriceMon/internal/scheduler"
 	"context"
+	"log"
 	"time"
 )
 
@@ -49,6 +50,56 @@ type ProductPlanner struct {
 	pollInterval time.Duration
 }
 
+func NewProductPlanner(sch ScheduleRepository, tsk TaskRepository, poll time.Duration) ProductPlanner {
+	return ProductPlanner{
+		schedules:    sch,
+		tasks:        tsk,
+		pollInterval: poll,
+	}
+}
+
+// func (pp *ProductPlanner) Run(ctx context.Context) {
+// 	ticker := time.NewTicker(pp.pollInterval)
+// 	defer ticker.Stop()
+
+// 	for {
+// 		select {
+// 		case <-ctx.Done():
+// 			return
+// 		case <-ticker.C:
+// 			now := time.Now()
+
+// 			products, err := pp.schedules.ListActive(ctx)
+// 			if err != nil {
+// 				continue
+// 			}
+
+// 			for _, product := range products {
+
+// 				exist, err := pp.tasks.HasFutureTask(ctx, product.ProductID, now)
+
+// 				if exist || err != nil {
+// 					continue
+// 				}
+
+// 				nextRun := NextRunAt(product, now)
+
+// 				newCheckTask := scheduler.CheckTask{
+// 					ProductID:   product.ProductID,
+// 					URL:         product.URL,
+// 					ScheduledAt: nextRun,
+// 					Attempt:     0,
+// 				}
+
+// 				_, err = pp.tasks.Create(ctx, newCheckTask)
+// 				if err != nil {
+// 					continue
+// 				}
+// 			}
+// 		}
+// 	}
+// }
+
 func (pp *ProductPlanner) Run(ctx context.Context) {
 	ticker := time.NewTicker(pp.pollInterval)
 	defer ticker.Stop()
@@ -62,30 +113,52 @@ func (pp *ProductPlanner) Run(ctx context.Context) {
 
 			products, err := pp.schedules.ListActive(ctx)
 			if err != nil {
+				log.Printf("ListActive error: %v", err)
 				continue
 			}
 
+			log.Printf("active products: %d", len(products))
+
 			for _, product := range products {
+				log.Printf(
+					"product id=%d url=%s interval=%s",
+					product.ProductID,
+					product.URL,
+					product.Interval,
+				)
 
 				exist, err := pp.tasks.HasFutureTask(ctx, product.ProductID, now)
+				if err != nil {
+					log.Printf("HasFutureTask product=%d error: %v", product.ProductID, err)
+					continue
+				}
 
-				if exist || err != nil {
+				log.Printf("product=%d futureTask=%v", product.ProductID, exist)
+
+				if exist {
 					continue
 				}
 
 				nextRun := NextRunAt(product, now)
 
-				newCheckTask := scheduler.CheckTask{
+				log.Printf(
+					"creating task product=%d scheduled_at=%s",
+					product.ProductID,
+					nextRun,
+				)
+
+				task, err := pp.tasks.Create(ctx, scheduler.CheckTask{
 					ProductID:   product.ProductID,
 					URL:         product.URL,
 					ScheduledAt: nextRun,
 					Attempt:     0,
-				}
-
-				_, err = pp.tasks.Create(ctx, newCheckTask)
+				})
 				if err != nil {
+					log.Printf("Create task error: %v", err)
 					continue
 				}
+
+				log.Printf("created task id=%d", task.ID)
 			}
 		}
 	}

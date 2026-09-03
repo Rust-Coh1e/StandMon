@@ -2,6 +2,7 @@ package product_service
 
 import (
 	"PriceMon/internal/parser"
+	"PriceMon/internal/worker"
 	"context"
 	"fmt"
 	"time"
@@ -34,7 +35,7 @@ func NewProduct(url string, store string) Product {
 // Что Service хочет от хранилища.
 type ProductRepository interface {
 	Create(ctx context.Context, product Product) (Product, error)
-	CreatePriceSnapshot(ctx context.Context, snapshot PriceSnapshot) error
+	CreatePriceSnapshot(ctx context.Context, inputSnapshot worker.CheckResult, finishedAt time.Time) error
 }
 
 // Что Service хочет от Registry.
@@ -78,17 +79,17 @@ func (s *Service) Create(ctx context.Context, productURL string) (Product, error
 	}
 
 	// 5. Создаём первый снимок цены.
-	snapshot := PriceSnapshot{
-		ProductID: savedProduct.ID,
-		Price:     info.Price,
-		CheckedAt: info.CheckedAt,
-	}
+	// snapshot := PriceSnapshot{
+	// 	ProductID: savedProduct.ID,
+	// 	Price:     info.Price,
+	// 	CheckedAt: info.CheckedAt,
+	// }
 
 	// 6. Сохраняем снимок.
-	err = s.repo.CreatePriceSnapshot(ctx, snapshot)
-	if err != nil {
-		return Product{}, fmt.Errorf("create price snapshot: %w", err)
-	}
+	// err = s.repo.CreatePriceSnapshot(ctx, snapshot)
+	// if err != nil {
+	// 	return Product{}, fmt.Errorf("create price snapshot: %w", err)
+	// }
 
 	return savedProduct, nil
 }

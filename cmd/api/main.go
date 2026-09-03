@@ -2,14 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"PriceMon/internal/checkprocessor"
-	"PriceMon/internal/parser"
+	"PriceMon/internal/handler"
 	"PriceMon/internal/planner"
 	"PriceMon/internal/registry"
 	postgres "PriceMon/internal/repository"
@@ -20,7 +22,6 @@ import (
 )
 
 func main() {
-	// Один context управляет жизненным циклом всего приложения.
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
@@ -34,7 +35,7 @@ func main() {
 
 	db, err := pgxpool.New(
 		ctx,
-		"postgres://user:password@localhost:5432/pricemon",
+		"postgres://user:password@localhost:5434/pricemon",
 	)
 	if err != nil {
 		log.Fatalf("postgres connect: %v", err)
@@ -58,20 +59,22 @@ func main() {
 	)
 
 	// -------------------------
-	// Parsers + Registry
+	// Parser Registry
 	// -------------------------
 
 	parserRegistry := registry.NewParserRegistry()
 
+	// Если NewParserRegistry сам НЕ регистрирует парсеры,
+	// зарегистрируй их здесь.
 
 	// -------------------------
 	// Planner
 	// -------------------------
 
 	productPlanner := planner.NewProductPlanner(
-		repo          // ListActive
-		repo,          // HasFutureTask + Create
-		5*time.Second, // как часто проверяем необходимость создать task
+		repo,
+		repo,
+		5*time.Second,
 	)
 
 	// -------------------------
@@ -80,12 +83,10 @@ func main() {
 
 	taskScheduler := scheduler.NewScheduler(
 		repo,
-		time.Second, // polling due tasks
-		10,          // batch size
+		time.Second,
+		10,
 	)
 
-	// Scheduler сам запускает goroutine
-	// и отдаёт канал задач.
 	tasks := taskScheduler.Run(ctx)
 
 	// -------------------------
@@ -97,8 +98,6 @@ func main() {
 		5,
 	)
 
-	// WorkerPool также запускает workers
-	// и возвращает канал результатов.
 	results := workerPool.Run(ctx, tasks)
 
 	// -------------------------
@@ -107,7 +106,10 @@ func main() {
 
 	checkProcessor := checkprocessor.NewCheckProcessor(repo)
 
-	// Planner блокирующий, поэтому запускаем отдельно.
+	// -------------------------
+	// Background processes
+	// -------------------------
+
 	go func() {
 		log.Println("planner started")
 
@@ -116,12 +118,11 @@ func main() {
 		log.Println("planner stopped")
 	}()
 
-	// CheckProcessor тоже блокирующий.
 	go func() {
 		log.Println("check processor started")
 
 		if err := checkProcessor.Run(ctx, results); err != nil {
-			log.Printf("check processor stopped with error: %v", err)
+			log.Printf("check processor error: %v", err)
 			cancel()
 			return
 		}
@@ -129,10 +130,53 @@ func main() {
 		log.Println("check processor stopped")
 	}()
 
+	// -------------------------
+	// HTTP API
+	// -------------------------
+	parseHandler := handler.NewParseHandler(
+		parserRegistry,
+		repo,
+	)
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /products", parseHandler.Create)
+
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	go func() {
+		log.Println("HTTP server started on :8080")
+
+		err := server.ListenAndServe()
+
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("HTTP server error: %v", err)
+			cancel()
+		}
+	}()
+
 	log.Println("price monitor started")
 
-	// main живёт, пока приложение не получит Ctrl+C / SIGTERM.
+	// -------------------------
+	// Shutdown
+	// -------------------------
+
 	<-ctx.Done()
 
 	log.Println("shutting down")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
+	defer shutdownCancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP shutdown error: %v", err)
+	}
+
+	log.Println("price monitor stopped")
 }

@@ -23,8 +23,15 @@ func NewCheckResult(task scheduler.CheckTask, info parser.ProductInfo, err error
 }
 
 type WorkerPool struct {
-	registry registry.ParserRegistry
+	registry *registry.ParserRegistry
 	workers  int
+}
+
+func NewWorkerPool(regis *registry.ParserRegistry, work int) WorkerPool {
+	return WorkerPool{
+		registry: regis,
+		workers:  work,
+	}
 }
 
 func (w *WorkerPool) Run(ctx context.Context, tasks <-chan scheduler.CheckTask) <-chan CheckResult {
